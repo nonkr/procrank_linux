@@ -41,6 +41,12 @@ RAM: 509016K total, 346780K free, 14616K buffers, 70652K cached,
 
 Run "./procranc -h" to see the help screen for more options.
 
+Use `-H` to print memory values in a human-readable format:
+
+```
+./procrank -H
+```
+
 # Theory
 
 If you are intereted in the  background, I have written a blog post on smaps
@@ -62,4 +68,3 @@ The source for libpagemap is from $AOSP/system/extras/libpagemap
 
 And the source for strlcpy is from
 $AOSP/bionic/libc/upstream-openbsd/lib/libc/string/strlcpy.c libpagemap
-

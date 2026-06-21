@@ -14,11 +14,16 @@
  * limitations under the License.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -34,8 +39,10 @@ struct proc_info {
 };
 
 static void usage(char *myname);
+static void format_mem_size(uint64_t bytes, char *buf, size_t len);
 static int getprocname(pid_t pid, char *buf, int len);
 static int numcmp(uint64_t a, uint64_t b);
+size_t strlcpy(char *dst, const char *src, size_t siz);
 
 #define declare_sort(field) \
     static int sort_by_ ## field (const void *a, const void *b)
@@ -49,7 +56,18 @@ declare_sort(swap);
 int (*compfn)(const void *a, const void *b);
 static int order;
 
-void print_mem_info() {
+static void print_mem_value(uint64_t bytes, int width, bool human_readable) {
+    char buffer[16];
+
+    if (human_readable) {
+        format_mem_size(bytes, buffer, sizeof(buffer));
+        printf("%*s  ", width, buffer);
+    } else {
+        printf("%*" PRIu64 "K  ", width - 1, bytes / 1024);
+    }
+}
+
+void print_mem_info(bool human_readable) {
     char buffer[1024];
     int numFound = 0;
 
@@ -114,9 +132,28 @@ void print_mem_info() {
         if (*p) p++;
     }
 
-    printf("RAM: %" PRIu64 "K total, %" PRIu64 "K free, %" PRIu64 "K buffers, "
-            "%" PRIu64 "K cached, %" PRIu64 "K shmem, %" PRIu64 "K slab\n",
-            mem[0], mem[1], mem[2], mem[3], mem[4], mem[5]);
+    if (human_readable) {
+        char total[16];
+        char free_mem[16];
+        char buffers[16];
+        char cached[16];
+        char shmem[16];
+        char slab[16];
+
+        format_mem_size(mem[0] * 1024, total, sizeof(total));
+        format_mem_size(mem[1] * 1024, free_mem, sizeof(free_mem));
+        format_mem_size(mem[2] * 1024, buffers, sizeof(buffers));
+        format_mem_size(mem[3] * 1024, cached, sizeof(cached));
+        format_mem_size(mem[4] * 1024, shmem, sizeof(shmem));
+        format_mem_size(mem[5] * 1024, slab, sizeof(slab));
+        printf("RAM: %s total, %s free, %s buffers, "
+                "%s cached, %s shmem, %s slab\n",
+                total, free_mem, buffers, cached, shmem, slab);
+    } else {
+        printf("RAM: %" PRIu64 "K total, %" PRIu64 "K free, %" PRIu64 "K buffers, "
+                "%" PRIu64 "K cached, %" PRIu64 "K shmem, %" PRIu64 "K slab\n",
+                mem[0], mem[1], mem[2], mem[3], mem[4], mem[5]);
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -131,6 +168,7 @@ int main(int argc, char *argv[]) {
     char cmdline[256]; // this must be within the range of int
     int error;
     bool has_swap = false;
+    bool human_readable = false;
     uint64_t required_flags = 0;
     uint64_t flags_mask = 0;
 
@@ -159,6 +197,7 @@ int main(int argc, char *argv[]) {
         if (!strcmp(argv[arg], "-w")) { ws = WS_ONLY; continue; }
         if (!strcmp(argv[arg], "-W")) { ws = WS_RESET; continue; }
         if (!strcmp(argv[arg], "-R")) { order *= -1; continue; }
+        if (!strcmp(argv[arg], "-H")) { human_readable = true; continue; }
         if (!strcmp(argv[arg], "-h")) { usage(argv[0]); exit(0); }
         fprintf(stderr, "Invalid argument \"%s\".\n", argv[arg]);
         usage(argv[0]);
@@ -274,22 +313,18 @@ int main(int argc, char *argv[]) {
         printf("%5d  ", procs[i]->pid);
 
         if (ws) {
-            printf("%6zuK  %6zuK  %6zuK  ",
-                procs[i]->usage.rss / 1024,
-                procs[i]->usage.pss / 1024,
-                procs[i]->usage.uss / 1024
-            );
+            print_mem_value(procs[i]->usage.rss, 7, human_readable);
+            print_mem_value(procs[i]->usage.pss, 7, human_readable);
+            print_mem_value(procs[i]->usage.uss, 7, human_readable);
         } else {
-            printf("%7zuK  %6zuK  %6zuK  %6zuK  ",
-                procs[i]->usage.vss / 1024,
-                procs[i]->usage.rss / 1024,
-                procs[i]->usage.pss / 1024,
-                procs[i]->usage.uss / 1024
-            );
+            print_mem_value(procs[i]->usage.vss, 8, human_readable);
+            print_mem_value(procs[i]->usage.rss, 7, human_readable);
+            print_mem_value(procs[i]->usage.pss, 7, human_readable);
+            print_mem_value(procs[i]->usage.uss, 7, human_readable);
         }
 
         if (has_swap) {
-            printf("%6zuK  ", procs[i]->usage.swap / 1024);
+            print_mem_value(procs[i]->usage.swap, 7, human_readable);
         }
 
         printf("%s\n", cmdline);
@@ -317,27 +352,33 @@ int main(int argc, char *argv[]) {
     /* Print the total line */
     printf("%5s  ", "");
     if (ws) {
-        printf("%7s  %6" PRIu64 "K  %" PRIu64 "K  ",
-            "", total_pss / 1024, total_uss / 1024);
+        printf("%7s  ", "");
+        print_mem_value(total_pss, 7, human_readable);
+        print_mem_value(total_uss, 7, human_readable);
     } else {
-        printf("%8s  %7s  %6" PRIu64 "K  %6" PRIu64 "K  ",
-            "", "", total_pss / 1024, total_uss / 1024);
+        printf("%8s  %7s  ", "", "");
+        print_mem_value(total_pss, 7, human_readable);
+        print_mem_value(total_uss, 7, human_readable);
     }
 
     if (has_swap) {
-        printf("%6" PRIu64 "K  ", total_swap);
+        if (human_readable) {
+            print_mem_value(total_swap, 7, human_readable);
+        } else {
+            printf("%6" PRIu64 "K  ", total_swap);
+        }
     }
 
     printf("TOTAL\n");
 
     printf("\n");
-    print_mem_info();
+    print_mem_info(human_readable);
 
     return 0;
 }
 
 static void usage(char *myname) {
-    fprintf(stderr, "Usage: %s [ -W ] [ -v | -r | -p | -u | -s | -h ]\n"
+    fprintf(stderr, "Usage: %s [ -W ] [ -H ] [ -v | -r | -p | -u | -s | -h ]\n"
                     "    -v  Sort by VSS.\n"
                     "    -r  Sort by RSS.\n"
                     "    -p  Sort by PSS.\n"
@@ -350,8 +391,32 @@ static void usage(char *myname) {
                     "    -k  Only show pages collapsed by KSM\n"
                     "    -w  Display statistics for working set only.\n"
                     "    -W  Reset working set of all processes.\n"
+                    "    -H  Display memory values in human-readable format.\n"
                     "    -h  Display this help screen.\n",
     myname);
+}
+
+static void format_mem_size(uint64_t bytes, char *buf, size_t len) {
+    static const char units[] = { 'K', 'M', 'G', 'T', 'P' };
+    double value;
+    size_t unit = 0;
+
+    if (bytes == 0) {
+        snprintf(buf, len, "0K");
+        return;
+    }
+
+    value = (double)bytes / 1024.0;
+    while (value >= 1024.0 && unit + 1 < sizeof(units)) {
+        value /= 1024.0;
+        unit++;
+    }
+
+    if (value >= 100.0) {
+        snprintf(buf, len, "%.0f%c", value, units[unit]);
+    } else {
+        snprintf(buf, len, "%.1f%c", value, units[unit]);
+    }
 }
 
 /*
